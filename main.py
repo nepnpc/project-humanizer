@@ -1,6 +1,6 @@
 import re
 import os
-import random
+import math
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -15,35 +15,61 @@ except ImportError:
     pass
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-MODEL = "llama-3.1-8b-instant"
+FAST_MODEL = "llama-3.1-8b-instant"        # summarization only
+MAIN_MODEL = "llama-3.3-70b-versatile"     # primary humanization
 
-# ---------------------------------------------------------------------------
-# System prompt — target is readable, natural, conversational human writing.
-# High burstiness and perplexity come from rhythm and word choice,
-# NOT from grammatical errors or broken English.
-# ---------------------------------------------------------------------------
-SYSTEM_PROMPT = (
-    "Rewrite the following text so it sounds like a real person wrote it — "
-    "conversational, thoughtful, and a little informal. Follow these rules:\n\n"
-    "1. SENTENCE LENGTH: Mix very short sentences (3–6 words) with longer flowing ones. "
-    "Never write three sentences of the same length in a row.\n"
-    "2. RHYTHM: Start some sentences with 'And', 'But', or 'So' for flow. "
-    "Use em-dashes — like this — to insert asides.\n"
-    "3. VOCABULARY: Prefer vivid, concrete words over generic ones. "
-    "Avoid: 'crucial', 'delve', 'tapestry', 'foster', 'pivotal', 'commendable', "
-    "'it is worth noting', 'in conclusion', 'moreover', 'furthermore', 'ultimately'.\n"
-    "4. PERSONAL VOICE: Add one or two short personal observations like "
-    "'honestly', 'which is strange', 'and that matters', 'go figure'. "
-    "Keep them brief — don't overdo it.\n"
-    "5. CONTRACTIONS: Use them naturally — it's, don't, they're, wasn't.\n"
-    "6. DO NOT: lecture, summarise, or write like an essay. "
-    "Sound like someone telling you something interesting, not writing a report.\n\n"
-    "Return only the rewritten text. No intro, no commentary."
-)
+# ─────────────────────────────────────────────────────────────────────────────
+# Prompts
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ---------------------------------------------------------------------------
+REWRITE_SYSTEM = """You rewrite text to defeat AI detectors. AI detectors measure two signals:
+• PERPLEXITY — how predictable each word choice is. High perplexity = sounds human.
+• BURSTINESS — how much sentence lengths vary. High burstiness = sounds human.
+
+You must maximise both.
+
+━━ SENTENCE LENGTH — this is mandatory, not optional ━━
+• Include at least 2 sentences that are under 7 words. Short. Punchy. Declarative.
+• Include at least 3 sentences between 10–20 words.
+• Include no more than 1 sentence over 28 words.
+• NEVER place two sentences of similar length consecutively.
+• A pattern like: long → short → medium → short → long → medium is ideal.
+
+━━ BANNED WORDS — never use these ━━
+utilize, leverage, delve, crucial, vital, pivotal, comprehensive, robust, facilitate,
+implement, enhance, ensure, seamlessly, streamline, innovative, cutting-edge, paradigm,
+synergy, commendable, "in today's world", "in the realm of", "it is worth noting",
+"plays a crucial role", "at the end of the day", "moving forward", "in conclusion",
+"furthermore", "moreover", "additionally", "notably", "overall", "it goes without saying".
+
+━━ VOICE ━━
+• Use contractions everywhere they fit: it's, don't, can't, we're, they've, wouldn't, I'd.
+• Start 2–3 sentences with "And", "But", or "So" — the way people actually talk.
+• Add exactly one brief casual aside anywhere it feels natural: "honestly", "which is odd",
+  "and that matters", "go figure", "strangely enough". Just one — don't overdo it.
+• Use an em-dash — like this — once or twice for a parenthetical aside.
+
+━━ OUTPUT RULES ━━
+• Return ONLY the rewritten text. No preamble, no "Here is the rewritten text:", nothing.
+• Do not add bullet points, headers, or numbered lists.
+• Do not change facts or meaning — only change how it's said."""
+
+POLISH_SYSTEM = """Do a tight final edit on this text. Make these specific fixes only:
+
+1. RHYTHM: Find any two consecutive sentences within 4 words of each other in length.
+   Either split the longer one into two, or merge one of them with a neighbor.
+2. TRANSITIONS: Remove any AI-sounding transition at the start of a sentence:
+   "In conclusion", "Furthermore", "Moreover", "Additionally", "Notably", "Overall",
+   "It is worth noting that", "It goes without saying".
+3. STIFFNESS: Replace any formal or stiff word with a plain spoken alternative.
+4. CONTRACTIONS: Apply contractions wherever they'd sound natural.
+
+Return ONLY the edited text. No explanation."""
+
+# ─────────────────────────────────────────────────────────────────────────────
 # App lifespan
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+
 nlp: spacy.Language | None = None
 
 
@@ -78,64 +104,44 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ---------------------------------------------------------------------------
-# Pipeline helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-processing tables
+# ─────────────────────────────────────────────────────────────────────────────
 
-def count_words(text: str) -> int:
-    return len(text.split())
+# AI cliché replacement — catches whatever the LLM still slips through
+_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\butilize\b", re.IGNORECASE), "use"),
+    (re.compile(r"\butilization\b", re.IGNORECASE), "use"),
+    (re.compile(r"\bleverage\b", re.IGNORECASE), "use"),
+    (re.compile(r"\bdelve\b", re.IGNORECASE), "dig"),
+    (re.compile(r"\bfacilitate\b", re.IGNORECASE), "help"),
+    (re.compile(r"\bcommence\b", re.IGNORECASE), "start"),
+    (re.compile(r"\benhance\b", re.IGNORECASE), "improve"),
+    (re.compile(r"\bseamlessly\b", re.IGNORECASE), "smoothly"),
+    (re.compile(r"\bcutting-edge\b", re.IGNORECASE), "latest"),
+    (re.compile(r"\binnovative\b", re.IGNORECASE), "new"),
+    (re.compile(r"\brobust\b", re.IGNORECASE), "solid"),
+    (re.compile(r"\bcomprehensive\b", re.IGNORECASE), "thorough"),
+    (re.compile(r"\bpivotal\b", re.IGNORECASE), "key"),
+    (re.compile(r"\bcrucial\b", re.IGNORECASE), "important"),
+    (re.compile(r"\bgame-changer\b", re.IGNORECASE), "big shift"),
+    (re.compile(r"\bparadigm shift\b", re.IGNORECASE), "major change"),
+    (re.compile(r"\bsynergy\b", re.IGNORECASE), "teamwork"),
+    (re.compile(r"\bit is worth noting that\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bit is important to note that\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bin today's (?:fast-paced )?world\b", re.IGNORECASE), "these days"),
+    (re.compile(r"\bin the realm of\b", re.IGNORECASE), "in"),
+    (re.compile(r"\bgame-changer\b", re.IGNORECASE), "big deal"),
+    (re.compile(r"\bin conclusion,?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bfurthermore,?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bmoreover,?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\badditionally,?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bnotably,?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\boverall,?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bit goes without saying\s*(?:that)?\s*", re.IGNORECASE), ""),
+]
 
-
-# Phase 1: optional summarisation
-
-def summarize_text(text: str, target_words: int) -> str:
-    response = get_client().chat.completions.create(
-        model=MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    f"Condense the following text to strictly fewer than {target_words} words. "
-                    "Preserve the key ideas. Return only the condensed text."
-                ),
-            },
-            {"role": "user", "content": text},
-        ],
-        temperature=0.3,
-    )
-    return response.choices[0].message.content.strip()
-
-
-# Phase 2: NLP chunking
-
-def chunk_text(text: str, sentences_per_chunk: int = 3) -> list[str]:
-    doc = nlp(text)
-    sentences = [s.text.strip() for s in doc.sents if s.text.strip()]
-    chunks = []
-    for i in range(0, len(sentences), sentences_per_chunk):
-        block = " ".join(sentences[i : i + sentences_per_chunk])
-        if block:
-            chunks.append(block)
-    return chunks
-
-
-# Phase 3: LLM rewrite
-
-def humanize_chunk(chunk: str) -> str:
-    response = get_client().chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": chunk},
-        ],
-        temperature=0.88,
-    )
-    return response.choices[0].message.content.strip()
-
-
-# Phase 4a: contractions
-
-_CONTRACTION_RULES: list[tuple[re.Pattern, str]] = [
+_CONTRACTIONS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bcannot\b", re.IGNORECASE), "can't"),
     (re.compile(r"\bwill not\b", re.IGNORECASE), "won't"),
     (re.compile(r"\bwould not\b", re.IGNORECASE), "wouldn't"),
@@ -173,97 +179,172 @@ _CONTRACTION_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bwho is\b", re.IGNORECASE), "who's"),
 ]
 
-_AI_OPENER_PATTERN = re.compile(
-    r"^(?:"
-    r"In conclusion,?\s*|"
-    r"Ultimately,?\s*|"
-    r"To summarize,?\s*|"
-    r"In summary,?\s*|"
-    r"To conclude,?\s*|"
-    r"In closing,?\s*|"
-    r"As a result,?\s*|"
-    r"Therefore,?\s*|"
-    r"Thus,?\s*|"
-    r"Hence,?\s*|"
-    r"It(?:'s| is) worth noting that\s*|"
-    r"It is important to note that\s*|"
-    r"Notably,?\s*|"
-    r"Overall,?\s*|"
-    r"All in all,?\s*"
-    r")",
-    re.IGNORECASE | re.MULTILINE,
-)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def count_words(text: str) -> int:
+    return len(text.split())
+
+
+def get_sentences(text: str) -> list[str]:
+    doc = nlp(text)
+    return [s.text.strip() for s in doc.sents if s.text.strip()]
+
+
+def burstiness_score(sentences: list[str]) -> float:
+    """
+    Coefficient of variation of sentence word-lengths.
+    Human text: typically 0.55–0.90+
+    AI text: typically 0.25–0.45
+    """
+    lengths = [len(s.split()) for s in sentences]
+    if len(lengths) < 2:
+        return 1.0
+    mean = sum(lengths) / len(lengths)
+    if mean == 0:
+        return 0.0
+    variance = sum((l - mean) ** 2 for l in lengths) / len(lengths)
+    return math.sqrt(variance) / mean
+
+
+def apply_replacements(text: str) -> str:
+    for pattern, replacement in _REPLACEMENTS:
+        text = pattern.sub(replacement, text)
+    text = re.sub(r" {2,}", " ", text).strip()
+    # Fix capitalisation after an empty-replacement wipe at sentence start
+    text = re.sub(r"\.\s+([a-z])", lambda m: ". " + m.group(1).upper(), text)
+    return text
 
 
 def apply_contractions(text: str) -> str:
-    for pattern, replacement in _CONTRACTION_RULES:
+    for pattern, replacement in _CONTRACTIONS:
         text = pattern.sub(replacement, text)
     return text
 
 
-def strip_ai_phrases(text: str) -> str:
-    return _AI_OPENER_PATTERN.sub("", text).strip()
-
-
-# Phase 4b: subtle burstiness enforcement
-# Splits overly long sentences at a natural conjunction point.
-# This is the ONE mechanical trick that genuinely raises burstiness score
-# without making the text look wrong.
-
-def _find_conjunction_cut(words: list[str]) -> int | None:
-    conjunctions = {"and", "but", "so", "because", "although", "though", "while", "since"}
-    mid = len(words) // 2
-    for offset in range(0, mid - 2):
-        for i in [mid + offset, mid - offset]:
-            if 4 < i < len(words) - 4 and words[i].lower() in conjunctions:
-                return i
-    return None
-
-
-def enforce_burstiness(text: str, long_threshold: int = 28) -> str:
+def enforce_burstiness(text: str, target_cv: float = 0.55) -> str:
     """
-    Split sentences over `long_threshold` words at a mid-point conjunction.
-    Only fires on ~60% of eligible sentences to avoid over-processing.
+    Measure sentence-length variance. If below target_cv,
+    split the longest sentences at a natural conjunction break
+    to inject short-sentence contrast.
     """
-    doc = nlp(text)
-    result = []
-    for sent in doc.sents:
-        words = sent.text.strip().split()
-        if len(words) > long_threshold and random.random() < 0.6:
-            cut = _find_conjunction_cut(words)
-            if cut:
-                part1 = " ".join(words[:cut]).rstrip(",")
-                part2 = " ".join(words[cut:])
-                # Capitalise start of part2 if it begins with a conjunction
-                part2 = part2[0].upper() + part2[1:]
-                result.append(f"{part1}. {part2}")
-                continue
-        result.append(sent.text.strip())
-    return " ".join(result)
+    sentences = get_sentences(text)
+    if burstiness_score(sentences) >= target_cv:
+        return text  # already bursty enough
+
+    conjunctions = {"and", "but", "so", "because", "although", "though", "while", "since", "yet"}
+    modified: dict[int, str] = dict(enumerate(sentences))
+    max_splits = max(1, len(sentences) // 3)
+    split_count = 0
+
+    # Process from longest sentence downward
+    by_length = sorted(modified.keys(), key=lambda i: len(modified[i].split()), reverse=True)
+
+    for idx in by_length:
+        if split_count >= max_splits:
+            break
+        words = modified[idx].split()
+        if len(words) < 20:
+            break
+        mid = len(words) // 2
+        cut: int | None = None
+        for offset in range(0, mid - 3):
+            for i in [mid + offset, mid - offset]:
+                if 4 < i < len(words) - 4 and words[i].lower() in conjunctions:
+                    cut = i
+                    break
+            if cut is not None:
+                break
+        if cut is not None:
+            part1 = " ".join(words[:cut]).rstrip(",") + "."
+            part2 = words[cut][0].upper() + words[cut][1:] + " " + " ".join(words[cut + 1:])
+            modified[idx] = f"{part1} {part2}"
+            split_count += 1
+
+    return " ".join(modified[i] for i in sorted(modified))
 
 
-# Phase 5: sentence-aware truncation
+def chunk_text(text: str, sentences_per_chunk: int = 5) -> list[str]:
+    """
+    Larger chunks (5 sentences) keep more context for the LLM,
+    producing better rhythm and coherence than 3-sentence chunks.
+    """
+    sentences = get_sentences(text)
+    chunks = []
+    for i in range(0, len(sentences), sentences_per_chunk):
+        block = " ".join(sentences[i: i + sentences_per_chunk])
+        if block:
+            chunks.append(block)
+    return chunks
+
 
 def truncate_to_word_limit(text: str, limit: int) -> str:
     if count_words(text) <= limit:
         return text
-    doc = nlp(text)
+    sentences = get_sentences(text)
     result: list[str] = []
-    word_count = 0
-    for sent in doc.sents:
-        sent_text = sent.text.strip()
-        sent_words = len(sent_text.split())
-        if word_count + sent_words <= limit:
-            result.append(sent_text)
-            word_count += sent_words
+    total = 0
+    for sent in sentences:
+        sw = len(sent.split())
+        if total + sw <= limit:
+            result.append(sent)
+            total += sw
         else:
             break
     return " ".join(result)
 
 
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM calls
+# ─────────────────────────────────────────────────────────────────────────────
+
+def llm(system: str, user_text: str, model: str, temperature: float) -> str:
+    response = get_client().chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_text},
+        ],
+        temperature=temperature,
+    )
+    return response.choices[0].message.content.strip()
+
+
+def summarize_text(text: str, target_words: int) -> str:
+    return llm(
+        system=(
+            f"Condense the following text to strictly fewer than {target_words} words. "
+            "Preserve all key ideas. Return only the condensed text."
+        ),
+        user_text=text,
+        model=FAST_MODEL,
+        temperature=0.3,
+    )
+
+
+def humanize_chunk(chunk: str) -> str:
+    return llm(
+        system=REWRITE_SYSTEM,
+        user_text=chunk,
+        model=MAIN_MODEL,
+        temperature=0.92,
+    )
+
+
+def polish_pass(text: str) -> str:
+    return llm(
+        system=POLISH_SYSTEM,
+        user_text=text,
+        model=MAIN_MODEL,
+        temperature=0.72,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Routes
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 async def health():
@@ -287,32 +368,47 @@ async def humanize(request: Request):
     if target_word_limit < 10:
         return JSONResponse({"error": "Target word limit must be at least 10."}, status_code=400)
 
-    # Phase 1: Summarise if over limit
     original_count = count_words(raw_text)
     working_text = raw_text
-    if original_count > target_word_limit:
+
+    # Phase 1: Summarise if significantly over limit
+    if original_count > target_word_limit * 1.25:
         working_text = summarize_text(raw_text, target_word_limit)
 
-    # Phase 2: Chunk
-    chunks = chunk_text(working_text)
+    # Phase 2: Chunk into 5-sentence groups for coherence
+    chunks = chunk_text(working_text, sentences_per_chunk=5)
     if not chunks:
         return JSONResponse({"error": "Could not segment text."}, status_code=422)
 
-    # Phase 3: LLM rewrite
+    # Phase 3: Primary LLM rewrite (llama-3.3-70b-versatile per chunk)
     humanized_chunks = [humanize_chunk(c) for c in chunks]
-    draft_text = " ".join(humanized_chunks)
+    draft = " ".join(humanized_chunks)
 
-    # Phase 4: Post-processing
-    draft_text = apply_contractions(draft_text)
-    draft_text = strip_ai_phrases(draft_text)
-    draft_text = enforce_burstiness(draft_text)
+    # Phase 4: Post-processing — clichés, contractions, burstiness
+    draft = apply_replacements(draft)
+    draft = apply_contractions(draft)
+    draft = enforce_burstiness(draft)
 
-    # Phase 5: Truncate & return
-    draft_text = truncate_to_word_limit(draft_text, target_word_limit)
-    final_count = count_words(draft_text)
+    # Phase 5: Measure burstiness; run polish pass only if still low
+    sentences = get_sentences(draft)
+    score = burstiness_score(sentences)
+    ran_polish = False
+    if score < 0.45:
+        draft = polish_pass(draft)
+        draft = apply_replacements(draft)
+        draft = apply_contractions(draft)
+        sentences = get_sentences(draft)
+        score = burstiness_score(sentences)
+        ran_polish = True
+
+    # Phase 6: Truncate to word limit
+    draft = truncate_to_word_limit(draft, target_word_limit)
+    final_count = count_words(draft)
 
     return JSONResponse({
         "original_count": original_count,
         "final_count": final_count,
-        "humanized_text": draft_text,
+        "humanized_text": draft,
+        "burstiness_score": round(score, 3),
+        "polish_applied": ran_polish,
     })

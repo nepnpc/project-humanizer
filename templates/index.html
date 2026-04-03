@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Project Humanizer</title>
+  <title>Project Humanizer — llama-3.3-70b</title>
   <style>
     /* ── Reset & base ──────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -252,6 +252,7 @@
 
     .stat-value.accent { color: var(--accent); }
     .stat-value.success { color: var(--success); }
+    .stat-value.danger { color: var(--danger); }
 
     /* ── Copy button ───────────────────────────────────────────────────── */
     #copyBtn {
@@ -301,7 +302,7 @@
       <div class="logo-icon">&#9997;</div>
       <h1>Project Humanizer</h1>
     </div>
-    <p class="subtitle">Rewrites AI-generated text with natural burstiness &amp; perplexity using Llama 3 + spaCy.</p>
+    <p class="subtitle">Rewrites AI text with high burstiness &amp; perplexity — powered by Llama 3.3 70B + spaCy.</p>
   </header>
 
   <!-- ── Input card ─────────────────────────────────────────────────────── -->
@@ -404,6 +405,10 @@
         ? `&#8209;${delta} words trimmed`
         : `+${Math.abs(delta)} words added`;
 
+      const bScore = data.burstiness_score ?? 0;
+      const bClass = bScore >= 0.55 ? 'success' : bScore >= 0.40 ? 'accent' : 'danger';
+      const bLabel = bScore >= 0.55 ? 'Good' : bScore >= 0.40 ? 'Fair' : 'Low';
+
       statsStrip.innerHTML = `
         <div class="stat">
           <span class="stat-label">Original</span>
@@ -421,6 +426,11 @@
           <span class="stat-label">Delta</span>
           <span class="stat-value">${deltaLabel}</span>
         </div>
+        <div class="stat">
+          <span class="stat-label">Burstiness</span>
+          <span class="stat-value ${bClass}">${bScore} <small style="font-size:0.65rem;font-weight:400">(${bLabel})</small></span>
+        </div>
+        ${data.polish_applied ? `<div class="stat"><span class="stat-label">Pass</span><span class="stat-value accent">2×</span></div>` : ''}
       `;
 
       outputCard.style.display = 'block';
