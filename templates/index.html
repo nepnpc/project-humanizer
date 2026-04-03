@@ -302,7 +302,7 @@
       <div class="logo-icon">&#9997;</div>
       <h1>Project Humanizer</h1>
     </div>
-    <p class="subtitle">Rewrites AI text with high burstiness &amp; perplexity — powered by Llama 3.3 70B + spaCy.</p>
+    <p class="subtitle">Rewrites AI-generated text into natural university student report style — Llama 3.3 70B.</p>
   </header>
 
   <!-- ── Input card ─────────────────────────────────────────────────────── -->
@@ -311,7 +311,7 @@
     <textarea
       id="inputText"
       rows="10"
-      placeholder="Paste your AI-generated text here…"
+      placeholder="Paste your AI-generated report text here. Paragraph breaks are preserved — paste the full section or report body…"
     ></textarea>
 
     <div class="options-row">
@@ -405,9 +405,11 @@
         ? `&#8209;${delta} words trimmed`
         : `+${Math.abs(delta)} words added`;
 
+      // Academic writing naturally has lower sentence-length variation than casual prose.
+      // Good academic burstiness: CV ≥ 0.35 | Fair: ≥ 0.22 | Low: < 0.22
       const bScore = data.burstiness_score ?? 0;
-      const bClass = bScore >= 0.55 ? 'success' : bScore >= 0.40 ? 'accent' : 'danger';
-      const bLabel = bScore >= 0.55 ? 'Good' : bScore >= 0.40 ? 'Fair' : 'Low';
+      const bClass = bScore >= 0.35 ? 'success' : bScore >= 0.22 ? 'accent' : 'danger';
+      const bLabel = bScore >= 0.35 ? 'Good' : bScore >= 0.22 ? 'Fair' : 'Low';
 
       statsStrip.innerHTML = `
         <div class="stat">

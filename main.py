@@ -15,56 +15,100 @@ except ImportError:
     pass
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-FAST_MODEL = "llama-3.1-8b-instant"        # summarization only
-MAIN_MODEL = "llama-3.3-70b-versatile"     # primary humanization
+FAST_MODEL = "llama-3.1-8b-instant"
+MAIN_MODEL = "llama-3.3-70b-versatile"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Prompts
+# Prompts — academic report style
 # ─────────────────────────────────────────────────────────────────────────────
 
-REWRITE_SYSTEM = """You rewrite text to defeat AI detectors. AI detectors measure two signals:
-• PERPLEXITY — how predictable each word choice is. High perplexity = sounds human.
-• BURSTINESS — how much sentence lengths vary. High burstiness = sounds human.
+ACADEMIC_SYSTEM = """You are a diligent third-year university student rewriting a paragraph from your formal report submission. Your writing is competent and clear, but it is student writing — not a polished journal article and not AI-generated text.
 
-You must maximise both.
+━━ REGISTER ━━
+• Formal throughout. No slang, no casual language, no contractions at all.
+  Write "it is", "do not", "cannot", "they are" — never "it's", "don't", "can't", "they're".
+• Third person unless the original explicitly uses first person.
+• Clear and direct — not ornate. Students do not over-write.
 
-━━ SENTENCE LENGTH — this is mandatory, not optional ━━
-• Include at least 2 sentences that are under 7 words. Short. Punchy. Declarative.
-• Include at least 3 sentences between 10–20 words.
-• Include no more than 1 sentence over 28 words.
-• NEVER place two sentences of similar length consecutively.
-• A pattern like: long → short → medium → short → long → medium is ideal.
+━━ SENTENCE STRUCTURE — students mix these naturally ━━
+• Short declarative: "This indicates a significant difference."
+  "The results were consistent with the hypothesis."
+• Medium analytical: "This can be attributed to the fact that X, which in turn affects Y."
+• Longer with subordination: "Although X tends to Y under certain conditions,
+  the data collected in this study suggest that Z may also be a contributing factor."
+• Vary length across the paragraph. Avoid three sentences of the same length in a row.
+  Academic writing is not uniform — short summary sentences sit beside longer explanations.
 
-━━ BANNED WORDS — never use these ━━
-utilize, leverage, delve, crucial, vital, pivotal, comprehensive, robust, facilitate,
-implement, enhance, ensure, seamlessly, streamline, innovative, cutting-edge, paradigm,
-synergy, commendable, "in today's world", "in the realm of", "it is worth noting",
-"plays a crucial role", "at the end of the day", "moving forward", "in conclusion",
-"furthermore", "moreover", "additionally", "notably", "overall", "it goes without saying".
+━━ VOICE — the most important marker of student writing ━━
+• PASSIVE for findings, observations, and methods:
+  "it was found that", "it was observed that", "it can be seen that",
+  "the results indicate", "this was attributed to", "it has been noted that",
+  "it was determined that", "data were collected", "measurements were taken".
+• ACTIVE for what the report itself does:
+  "This section examines", "This report investigates", "The analysis considers",
+  "This study aims to", "The following section discusses".
 
-━━ VOICE ━━
-• Use contractions everywhere they fit: it's, don't, can't, we're, they've, wouldn't, I'd.
-• Start 2–3 sentences with "And", "But", or "So" — the way people actually talk.
-• Add exactly one brief casual aside anywhere it feels natural: "honestly", "which is odd",
-  "and that matters", "go figure", "strangely enough". Just one — don't overdo it.
-• Use an em-dash — like this — once or twice for a parenthetical aside.
+━━ HEDGING — students rarely make absolute claims ━━
+Use appropriately: "it can be argued that", "the evidence suggests", "this appears to indicate",
+"it is possible that", "to some extent", "this may be due to", "it seems likely that",
+"the data suggest" (not "the data prove").
 
-━━ OUTPUT RULES ━━
-• Return ONLY the rewritten text. No preamble, no "Here is the rewritten text:", nothing.
-• Do not add bullet points, headers, or numbered lists.
-• Do not change facts or meaning — only change how it's said."""
+━━ TRANSITIONS STUDENTS ACTUALLY USE ━━
+Openers: "Furthermore,", "In addition,", "However,", "Nevertheless,", "As a result,",
+"In contrast,", "Similarly,", "With regard to", "In terms of", "In relation to",
+"Building on this,", "This is further supported by"
+Back-references: "As discussed above,", "As noted previously,", "In line with this,",
+"Consistent with these findings,", "As shown in the previous section,"
+Conclusions of a paragraph: "This suggests that", "This indicates that",
+"This supports the view that", "This can be explained by"
 
-POLISH_SYSTEM = """Do a tight final edit on this text. Make these specific fixes only:
+━━ VOCABULARY ━━
+• Repeat key technical terms — students do not constantly rephrase subject-specific words.
+• Prefer clear over impressive. "use" is fine. "examine" is fine. "understand" is fine.
+• Academic alternatives to common AI words:
+  utilize → use | leverage → apply | delve → examine | facilitate → support | enable
+  innovative → novel | cutting-edge → recent | robust → reliable | comprehensive → thorough
+  seamlessly → effectively | enhance → improve | commence → begin
+• NEVER use: "it is worth noting that", "it is important to note that",
+  "it goes without saying", "in today's world", "in the realm of", "at the end of the day",
+  "moving forward", "game-changer", "paradigm shift", "synergy".
 
-1. RHYTHM: Find any two consecutive sentences within 4 words of each other in length.
-   Either split the longer one into two, or merge one of them with a neighbor.
-2. TRANSITIONS: Remove any AI-sounding transition at the start of a sentence:
-   "In conclusion", "Furthermore", "Moreover", "Additionally", "Notably", "Overall",
-   "It is worth noting that", "It goes without saying".
-3. STIFFNESS: Replace any formal or stiff word with a plain spoken alternative.
-4. CONTRACTIONS: Apply contractions wherever they'd sound natural.
+━━ PARAGRAPH STRUCTURE ━━
+• Topic sentence states the point of the paragraph.
+• 2–4 sentences develop, explain, or provide evidence.
+• Final sentence often links forward or draws a conclusion from the paragraph's evidence.
+• One clear idea per paragraph — do not mix unrelated points.
 
-Return ONLY the edited text. No explanation."""
+━━ OUTPUT ━━
+• Return ONLY the rewritten text.
+• Preserve any headers, bullet points, or numbered lists from the original exactly.
+• Do not restructure, reorder, or add new sections.
+• No preamble ("Here is the rewritten version…"), no labels, no commentary."""
+
+ACADEMIC_POLISH = """You are doing a final check on a paragraph from a university student's report. Make only these corrections:
+
+1. CONTRACTIONS: Expand every contraction — "it's" → "it is", "don't" → "do not",
+   "can't" → "cannot", "won't" → "will not", "they're" → "they are", and so on.
+   Academic reports do not use contractions.
+
+2. AI PHRASES: Remove or replace these specific phrases:
+   "it is worth noting that" → remove or rephrase as "Of note,"
+   "it is important to note that" → remove or rephrase naturally
+   "it goes without saying" → remove entirely
+   "in today's world" → "in recent years" or "currently"
+   "in conclusion," → "To summarise," or "In summary,"
+   "at the end of the day" → remove or rephrase
+   "moving forward" → rephrase naturally
+
+3. PASSIVE/ACTIVE: Findings and observations should use passive voice.
+   If a finding sentence is in active voice with "AI-style" construction, convert it.
+   Example: "The data clearly shows that X is crucial" →
+            "The data suggest that X plays an important role"
+
+4. HEDGING: Any absolute statement about uncertain findings should be hedged:
+   "proves" → "suggests" | "shows that" → "indicates that" | "clearly" → consider removing
+
+Return ONLY the corrected text. No explanation, no labels."""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App lifespan
@@ -80,7 +124,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Project Humanizer", lifespan=lifespan)
+app = FastAPI(title="Project Humanizer — Academic", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
 
 _client: Groq | None = None
@@ -108,75 +152,84 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Post-processing tables
 # ─────────────────────────────────────────────────────────────────────────────
 
-# AI cliché replacement — catches whatever the LLM still slips through
-_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"\butilize\b", re.IGNORECASE), "use"),
-    (re.compile(r"\butilization\b", re.IGNORECASE), "use"),
-    (re.compile(r"\bleverage\b", re.IGNORECASE), "use"),
-    (re.compile(r"\bdelve\b", re.IGNORECASE), "dig"),
-    (re.compile(r"\bfacilitate\b", re.IGNORECASE), "help"),
-    (re.compile(r"\bcommence\b", re.IGNORECASE), "start"),
-    (re.compile(r"\benhance\b", re.IGNORECASE), "improve"),
-    (re.compile(r"\bseamlessly\b", re.IGNORECASE), "smoothly"),
-    (re.compile(r"\bcutting-edge\b", re.IGNORECASE), "latest"),
-    (re.compile(r"\binnovative\b", re.IGNORECASE), "new"),
-    (re.compile(r"\brobust\b", re.IGNORECASE), "solid"),
-    (re.compile(r"\bcomprehensive\b", re.IGNORECASE), "thorough"),
-    (re.compile(r"\bpivotal\b", re.IGNORECASE), "key"),
-    (re.compile(r"\bcrucial\b", re.IGNORECASE), "important"),
-    (re.compile(r"\bgame-changer\b", re.IGNORECASE), "big shift"),
-    (re.compile(r"\bparadigm shift\b", re.IGNORECASE), "major change"),
-    (re.compile(r"\bsynergy\b", re.IGNORECASE), "teamwork"),
-    (re.compile(r"\bit is worth noting that\s*", re.IGNORECASE), ""),
-    (re.compile(r"\bit is important to note that\s*", re.IGNORECASE), ""),
-    (re.compile(r"\bin today's (?:fast-paced )?world\b", re.IGNORECASE), "these days"),
-    (re.compile(r"\bin the realm of\b", re.IGNORECASE), "in"),
-    (re.compile(r"\bgame-changer\b", re.IGNORECASE), "big deal"),
-    (re.compile(r"\bin conclusion,?\s*", re.IGNORECASE), ""),
-    (re.compile(r"\bfurthermore,?\s*", re.IGNORECASE), ""),
-    (re.compile(r"\bmoreover,?\s*", re.IGNORECASE), ""),
-    (re.compile(r"\badditionally,?\s*", re.IGNORECASE), ""),
-    (re.compile(r"\bnotably,?\s*", re.IGNORECASE), ""),
-    (re.compile(r"\boverall,?\s*", re.IGNORECASE), ""),
-    (re.compile(r"\bit goes without saying\s*(?:that)?\s*", re.IGNORECASE), ""),
+# Expand contractions — academic reports do not use them
+_EXPAND_CONTRACTIONS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"\bcan't\b", re.IGNORECASE), "cannot"),
+    (re.compile(r"\bwon't\b", re.IGNORECASE), "will not"),
+    (re.compile(r"\bwouldn't\b", re.IGNORECASE), "would not"),
+    (re.compile(r"\bcouldn't\b", re.IGNORECASE), "could not"),
+    (re.compile(r"\bshouldn't\b", re.IGNORECASE), "should not"),
+    (re.compile(r"\bdoesn't\b", re.IGNORECASE), "does not"),
+    (re.compile(r"\bdidn't\b", re.IGNORECASE), "did not"),
+    (re.compile(r"\bdon't\b", re.IGNORECASE), "do not"),
+    (re.compile(r"\baren't\b", re.IGNORECASE), "are not"),
+    (re.compile(r"\bweren't\b", re.IGNORECASE), "were not"),
+    (re.compile(r"\bwasn't\b", re.IGNORECASE), "was not"),
+    (re.compile(r"\bisn't\b", re.IGNORECASE), "is not"),
+    (re.compile(r"\bhaven't\b", re.IGNORECASE), "have not"),
+    (re.compile(r"\bhasn't\b", re.IGNORECASE), "has not"),
+    (re.compile(r"\bhadn't\b", re.IGNORECASE), "had not"),
+    (re.compile(r"\bI'm\b"), "I am"),
+    (re.compile(r"\bI've\b"), "I have"),
+    (re.compile(r"\bI'll\b"), "I will"),
+    (re.compile(r"\bI'd\b"), "I would"),
+    (re.compile(r"\bthey're\b", re.IGNORECASE), "they are"),
+    (re.compile(r"\bthey've\b", re.IGNORECASE), "they have"),
+    (re.compile(r"\bthey'll\b", re.IGNORECASE), "they will"),
+    (re.compile(r"\bwe're\b", re.IGNORECASE), "we are"),
+    (re.compile(r"\bwe've\b", re.IGNORECASE), "we have"),
+    (re.compile(r"\bwe'll\b", re.IGNORECASE), "we will"),
+    (re.compile(r"\byou're\b", re.IGNORECASE), "you are"),
+    (re.compile(r"\byou've\b", re.IGNORECASE), "you have"),
+    (re.compile(r"\byou'll\b", re.IGNORECASE), "you will"),
+    (re.compile(r"\bhe's\b", re.IGNORECASE), "he is"),
+    (re.compile(r"\bshe's\b", re.IGNORECASE), "she is"),
+    (re.compile(r"\bit's\b", re.IGNORECASE), "it is"),
+    (re.compile(r"\bthat's\b", re.IGNORECASE), "that is"),
+    (re.compile(r"\bthere's\b", re.IGNORECASE), "there is"),
+    (re.compile(r"\bwhat's\b", re.IGNORECASE), "what is"),
+    (re.compile(r"\bwho's\b", re.IGNORECASE), "who is"),
+    (re.compile(r"\bwhere's\b", re.IGNORECASE), "where is"),
+    (re.compile(r"\bthey'd\b", re.IGNORECASE), "they would"),
+    (re.compile(r"\bwe'd\b", re.IGNORECASE), "we would"),
+    (re.compile(r"\bhe'd\b", re.IGNORECASE), "he would"),
+    (re.compile(r"\bshe'd\b", re.IGNORECASE), "she would"),
 ]
 
-_CONTRACTIONS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"\bcannot\b", re.IGNORECASE), "can't"),
-    (re.compile(r"\bwill not\b", re.IGNORECASE), "won't"),
-    (re.compile(r"\bwould not\b", re.IGNORECASE), "wouldn't"),
-    (re.compile(r"\bcould not\b", re.IGNORECASE), "couldn't"),
-    (re.compile(r"\bshould not\b", re.IGNORECASE), "shouldn't"),
-    (re.compile(r"\bdoes not\b", re.IGNORECASE), "doesn't"),
-    (re.compile(r"\bdid not\b", re.IGNORECASE), "didn't"),
-    (re.compile(r"\bdo not\b", re.IGNORECASE), "don't"),
-    (re.compile(r"\bare not\b", re.IGNORECASE), "aren't"),
-    (re.compile(r"\bwere not\b", re.IGNORECASE), "weren't"),
-    (re.compile(r"\bwas not\b", re.IGNORECASE), "wasn't"),
-    (re.compile(r"\bis not\b", re.IGNORECASE), "isn't"),
-    (re.compile(r"\bhave not\b", re.IGNORECASE), "haven't"),
-    (re.compile(r"\bhas not\b", re.IGNORECASE), "hasn't"),
-    (re.compile(r"\bhad not\b", re.IGNORECASE), "hadn't"),
-    (re.compile(r"\bI am\b"), "I'm"),
-    (re.compile(r"\bI have\b"), "I've"),
-    (re.compile(r"\bI will\b"), "I'll"),
-    (re.compile(r"\bI would\b"), "I'd"),
-    (re.compile(r"\bthey are\b", re.IGNORECASE), "they're"),
-    (re.compile(r"\bthey have\b", re.IGNORECASE), "they've"),
-    (re.compile(r"\bthey will\b", re.IGNORECASE), "they'll"),
-    (re.compile(r"\bwe are\b", re.IGNORECASE), "we're"),
-    (re.compile(r"\bwe have\b", re.IGNORECASE), "we've"),
-    (re.compile(r"\bwe will\b", re.IGNORECASE), "we'll"),
-    (re.compile(r"\byou are\b", re.IGNORECASE), "you're"),
-    (re.compile(r"\byou have\b", re.IGNORECASE), "you've"),
-    (re.compile(r"\byou will\b", re.IGNORECASE), "you'll"),
-    (re.compile(r"\bhe is\b", re.IGNORECASE), "he's"),
-    (re.compile(r"\bshe is\b", re.IGNORECASE), "she's"),
-    (re.compile(r"\bit is\b", re.IGNORECASE), "it's"),
-    (re.compile(r"\bthat is\b", re.IGNORECASE), "that's"),
-    (re.compile(r"\bthere is\b", re.IGNORECASE), "there's"),
-    (re.compile(r"\bwhat is\b", re.IGNORECASE), "what's"),
-    (re.compile(r"\bwho is\b", re.IGNORECASE), "who's"),
+# AI cliché removal — catches whatever slips through the LLM rewrite
+_AI_PHRASES: list[tuple[re.Pattern, str]] = [
+    # Hard removes (phrase is just filler)
+    (re.compile(r"\bit is worth noting that\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bit is important to note that\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bit is important to\s+(?:understand|recognise|recognize)\s+that\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bit goes without saying\s*(?:that)?\s*", re.IGNORECASE), ""),
+    (re.compile(r"\bat the end of the day\b", re.IGNORECASE), "ultimately"),
+    (re.compile(r"\bmoving forward\b", re.IGNORECASE), "going forward"),
+    # Academic-appropriate replacements
+    (re.compile(r"\bin today's (?:fast-paced )?world\b", re.IGNORECASE), "in recent years"),
+    (re.compile(r"\bin the realm of\b", re.IGNORECASE), "in the field of"),
+    (re.compile(r"\bin conclusion,?\s*", re.IGNORECASE), "To summarise, "),
+    (re.compile(r"\bin summary,?\s*", re.IGNORECASE), "To summarise, "),
+    # Word-level replacements — academic versions
+    (re.compile(r"\butilize\b", re.IGNORECASE), "use"),
+    (re.compile(r"\butilization\b", re.IGNORECASE), "use"),
+    (re.compile(r"\bleverage\b", re.IGNORECASE), "apply"),
+    (re.compile(r"\bdelve\b", re.IGNORECASE), "examine"),
+    (re.compile(r"\bfacilitate\b", re.IGNORECASE), "support"),
+    (re.compile(r"\bcommence\b", re.IGNORECASE), "begin"),
+    (re.compile(r"\bseamlessly\b", re.IGNORECASE), "effectively"),
+    (re.compile(r"\bcutting-edge\b", re.IGNORECASE), "recent"),
+    (re.compile(r"\binnovative\b", re.IGNORECASE), "novel"),
+    (re.compile(r"\brobust\b", re.IGNORECASE), "reliable"),
+    (re.compile(r"\bcomprehensive\b", re.IGNORECASE), "thorough"),
+    (re.compile(r"\bpivotal\b", re.IGNORECASE), "significant"),
+    (re.compile(r"\bcrucial\b", re.IGNORECASE), "important"),
+    (re.compile(r"\bgame-changer\b", re.IGNORECASE), "major development"),
+    (re.compile(r"\bparadigm shift\b", re.IGNORECASE), "significant change"),
+    (re.compile(r"\bsynergy\b", re.IGNORECASE), "collaboration"),
+    (re.compile(r"\benhance\b", re.IGNORECASE), "improve"),
+    (re.compile(r"\bensure\b", re.IGNORECASE), "ensure"),  # "ensure" is fine in academic
+    (re.compile(r"\bstreamline\b", re.IGNORECASE), "simplify"),
 ]
 
 
@@ -196,8 +249,8 @@ def get_sentences(text: str) -> list[str]:
 def burstiness_score(sentences: list[str]) -> float:
     """
     Coefficient of variation of sentence word-lengths.
-    Human text: typically 0.55–0.90+
-    AI text: typically 0.25–0.45
+    Academic student writing: typically 0.35–0.60
+    AI academic text: typically 0.15–0.32 (very uniform)
     """
     lengths = [len(s.split()) for s in sentences]
     if len(lengths) < 2:
@@ -209,75 +262,87 @@ def burstiness_score(sentences: list[str]) -> float:
     return math.sqrt(variance) / mean
 
 
-def apply_replacements(text: str) -> str:
-    for pattern, replacement in _REPLACEMENTS:
+def is_structural_line(text: str) -> bool:
+    """
+    Returns True for lines that look like headers, section titles, or
+    list labels — things that should be passed through unchanged.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    word_count = len(stripped.split())
+    # Short, no terminal sentence punctuation, possibly numbered
+    no_terminal = not stripped[-1] in ".!?"
+    return word_count <= 7 and no_terminal
+
+
+def split_into_paragraphs(text: str) -> list[str]:
+    """Split on blank lines, preserving the paragraph structure of a report."""
+    paragraphs = re.split(r"\n[ \t]*\n", text.strip())
+    return [p.strip() for p in paragraphs if p.strip()]
+
+
+def expand_contractions(text: str) -> str:
+    """Expand all contractions — academic reports do not use them."""
+    for pattern, replacement in _EXPAND_CONTRACTIONS:
         text = pattern.sub(replacement, text)
+    return text
+
+
+def apply_ai_phrase_cleanup(text: str) -> str:
+    """Remove / replace AI clichés that slip past the LLM rewrite."""
+    for pattern, replacement in _AI_PHRASES:
+        text = pattern.sub(replacement, text)
+    # Clean up double spaces from phrase removals
     text = re.sub(r" {2,}", " ", text).strip()
-    # Fix capitalisation after an empty-replacement wipe at sentence start
+    # Restore capitalisation after a phrase was wiped at sentence start
     text = re.sub(r"\.\s+([a-z])", lambda m: ". " + m.group(1).upper(), text)
     return text
 
 
-def apply_contractions(text: str) -> str:
-    for pattern, replacement in _CONTRACTIONS:
-        text = pattern.sub(replacement, text)
-    return text
-
-
-def enforce_burstiness(text: str, target_cv: float = 0.55) -> str:
+def enforce_sentence_variety(text: str, min_cv: float = 0.30) -> str:
     """
-    Measure sentence-length variance. If below target_cv,
-    split the longest sentences at a natural conjunction break
-    to inject short-sentence contrast.
+    For academic text the target CV is lower than casual writing (~0.35–0.50).
+    Only intervene if sentences are extremely uniform (CV < min_cv).
+    Splits the longest sentences at a subordinating conjunction.
     """
     sentences = get_sentences(text)
-    if burstiness_score(sentences) >= target_cv:
-        return text  # already bursty enough
+    if burstiness_score(sentences) >= min_cv:
+        return text
 
-    conjunctions = {"and", "but", "so", "because", "although", "though", "while", "since", "yet"}
+    # Conjunctions acceptable to break on in academic writing
+    break_words = {"although", "though", "while", "whereas", "because",
+                   "since", "however", "which", "and", "but"}
+
     modified: dict[int, str] = dict(enumerate(sentences))
-    max_splits = max(1, len(sentences) // 3)
+    max_splits = max(1, len(sentences) // 4)
     split_count = 0
 
-    # Process from longest sentence downward
     by_length = sorted(modified.keys(), key=lambda i: len(modified[i].split()), reverse=True)
 
     for idx in by_length:
         if split_count >= max_splits:
             break
         words = modified[idx].split()
-        if len(words) < 20:
+        if len(words) < 22:
             break
         mid = len(words) // 2
         cut: int | None = None
-        for offset in range(0, mid - 3):
+        for offset in range(0, mid - 4):
             for i in [mid + offset, mid - offset]:
-                if 4 < i < len(words) - 4 and words[i].lower() in conjunctions:
+                if 5 < i < len(words) - 5 and words[i].lower() in break_words:
                     cut = i
                     break
             if cut is not None:
                 break
         if cut is not None:
             part1 = " ".join(words[:cut]).rstrip(",") + "."
-            part2 = words[cut][0].upper() + words[cut][1:] + " " + " ".join(words[cut + 1:])
+            w = words[cut]
+            part2 = w[0].upper() + w[1:] + " " + " ".join(words[cut + 1:])
             modified[idx] = f"{part1} {part2}"
             split_count += 1
 
     return " ".join(modified[i] for i in sorted(modified))
-
-
-def chunk_text(text: str, sentences_per_chunk: int = 5) -> list[str]:
-    """
-    Larger chunks (5 sentences) keep more context for the LLM,
-    producing better rhythm and coherence than 3-sentence chunks.
-    """
-    sentences = get_sentences(text)
-    chunks = []
-    for i in range(0, len(sentences), sentences_per_chunk):
-        block = " ".join(sentences[i: i + sentences_per_chunk])
-        if block:
-            chunks.append(block)
-    return chunks
 
 
 def truncate_to_word_limit(text: str, limit: int) -> str:
@@ -316,29 +381,32 @@ def summarize_text(text: str, target_words: int) -> str:
     return llm(
         system=(
             f"Condense the following text to strictly fewer than {target_words} words. "
-            "Preserve all key ideas. Return only the condensed text."
+            "Preserve all key arguments, findings, and structure. "
+            "Maintain formal academic language. Return only the condensed text."
         ),
         user_text=text,
         model=FAST_MODEL,
-        temperature=0.3,
+        temperature=0.25,
     )
 
 
-def humanize_chunk(chunk: str) -> str:
+def rewrite_paragraph(para: str) -> str:
+    """Rewrite a single paragraph in student academic style."""
     return llm(
-        system=REWRITE_SYSTEM,
-        user_text=chunk,
+        system=ACADEMIC_SYSTEM,
+        user_text=para,
         model=MAIN_MODEL,
-        temperature=0.92,
+        temperature=0.85,
     )
 
 
-def polish_pass(text: str) -> str:
+def polish_paragraph(para: str) -> str:
+    """Final check on a paragraph — contractions, AI phrases, passive voice."""
     return llm(
-        system=POLISH_SYSTEM,
-        user_text=text,
+        system=ACADEMIC_POLISH,
+        user_text=para,
         model=MAIN_MODEL,
-        temperature=0.72,
+        temperature=0.60,
     )
 
 
@@ -375,33 +443,54 @@ async def humanize(request: Request):
     if original_count > target_word_limit * 1.25:
         working_text = summarize_text(raw_text, target_word_limit)
 
-    # Phase 2: Chunk into 5-sentence groups for coherence
-    chunks = chunk_text(working_text, sentences_per_chunk=5)
-    if not chunks:
+    # Phase 2: Split by paragraph — preserves report structure
+    paragraphs = split_into_paragraphs(working_text)
+    if not paragraphs:
         return JSONResponse({"error": "Could not segment text."}, status_code=422)
 
-    # Phase 3: Primary LLM rewrite (llama-3.3-70b-versatile per chunk)
-    humanized_chunks = [humanize_chunk(c) for c in chunks]
-    draft = " ".join(humanized_chunks)
+    # Phase 3: Rewrite each paragraph in academic student style
+    rewritten: list[str] = []
+    for para in paragraphs:
+        if is_structural_line(para):
+            rewritten.append(para)  # pass headers through unchanged
+        elif count_words(para) < 8:
+            rewritten.append(para)  # too short to rewrite meaningfully
+        else:
+            rewritten.append(rewrite_paragraph(para))
 
-    # Phase 4: Post-processing — clichés, contractions, burstiness
-    draft = apply_replacements(draft)
-    draft = apply_contractions(draft)
-    draft = enforce_burstiness(draft)
+    draft = "\n\n".join(rewritten)
 
-    # Phase 5: Measure burstiness; run polish pass only if still low
-    sentences = get_sentences(draft)
-    score = burstiness_score(sentences)
+    # Phase 4: Post-processing — expand contractions, remove AI clichés
+    draft = expand_contractions(draft)
+    draft = apply_ai_phrase_cleanup(draft)
+
+    # Phase 5: Measure sentence variety per paragraph;
+    #           run polish pass on paragraphs that are still too uniform
+    processed_paragraphs = split_into_paragraphs(draft)
+    polished: list[str] = []
     ran_polish = False
-    if score < 0.45:
-        draft = polish_pass(draft)
-        draft = apply_replacements(draft)
-        draft = apply_contractions(draft)
-        sentences = get_sentences(draft)
-        score = burstiness_score(sentences)
-        ran_polish = True
 
-    # Phase 6: Truncate to word limit
+    for para in processed_paragraphs:
+        if is_structural_line(para) or count_words(para) < 8:
+            polished.append(para)
+            continue
+        sents = get_sentences(para)
+        if len(sents) >= 3 and burstiness_score(sents) < 0.28:
+            p = polish_paragraph(para)
+            p = expand_contractions(p)
+            p = apply_ai_phrase_cleanup(p)
+            polished.append(p)
+            ran_polish = True
+        else:
+            polished.append(enforce_sentence_variety(para))
+
+    draft = "\n\n".join(polished)
+
+    # Phase 6: Measure overall burstiness for UI display
+    all_sentences = get_sentences(draft)
+    score = burstiness_score(all_sentences)
+
+    # Phase 7: Truncate to word limit
     draft = truncate_to_word_limit(draft, target_word_limit)
     final_count = count_words(draft)
 
