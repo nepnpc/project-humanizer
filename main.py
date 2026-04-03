@@ -8,7 +8,6 @@ from fastapi.templating import Jinja2Templates
 import spacy
 from groq import Groq
 
-# Load .env file automatically when running locally.
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -19,26 +18,27 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 MODEL = "llama-3.1-8b-instant"
 
 # ---------------------------------------------------------------------------
-# System prompt — instructs the model to write like a non-native English
-# speaker (Nepali-style): dropped articles, tense variation, simple vocab,
-# personal asides, dramatic sentence length swings.
+# System prompt — target is readable, natural, conversational human writing.
+# High burstiness and perplexity come from rhythm and word choice,
+# NOT from grammatical errors or broken English.
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = (
-    "You are a Nepali university student who learned English as a second language. "
-    "Your English is good but not perfect — it has a natural, non-native feel. "
-    "Rewrite the given text following these rules strictly:\n"
-    "1. Drop 'the', 'a', or 'an' before some nouns randomly — not always, but noticeably.\n"
-    "2. Vary sentence length dramatically. Write some sentences that are only 4-6 words. "
-    "Then write one long sentence that connects several ideas with 'and', 'but', or 'so'.\n"
-    "3. Occasionally use present tense even when past would be correct, or vice versa.\n"
-    "4. Use simple, everyday vocabulary. Avoid academic words.\n"
-    "5. Add short personal observations like 'I think', 'honestly', 'from what I know', "
-    "'it seems to me', 'which is interesting actually'.\n"
-    "6. Sometimes start a sentence mid-thought, like 'And that is why...' or 'But still...'.\n"
-    "7. Never use: 'crucial', 'delve', 'tapestry', 'furthermore', 'moreover', "
-    "'it is worth noting', 'in conclusion', 'ultimately', 'commendable', 'pivotal'.\n"
-    "8. Do NOT sound like a textbook or a polished essay. Sound like a real person explaining something.\n"
-    "Return only the rewritten text, nothing else."
+    "Rewrite the following text so it sounds like a real person wrote it — "
+    "conversational, thoughtful, and a little informal. Follow these rules:\n\n"
+    "1. SENTENCE LENGTH: Mix very short sentences (3–6 words) with longer flowing ones. "
+    "Never write three sentences of the same length in a row.\n"
+    "2. RHYTHM: Start some sentences with 'And', 'But', or 'So' for flow. "
+    "Use em-dashes — like this — to insert asides.\n"
+    "3. VOCABULARY: Prefer vivid, concrete words over generic ones. "
+    "Avoid: 'crucial', 'delve', 'tapestry', 'foster', 'pivotal', 'commendable', "
+    "'it is worth noting', 'in conclusion', 'moreover', 'furthermore', 'ultimately'.\n"
+    "4. PERSONAL VOICE: Add one or two short personal observations like "
+    "'honestly', 'which is strange', 'and that matters', 'go figure'. "
+    "Keep them brief — don't overdo it.\n"
+    "5. CONTRACTIONS: Use them naturally — it's, don't, they're, wasn't.\n"
+    "6. DO NOT: lecture, summarise, or write like an essay. "
+    "Sound like someone telling you something interesting, not writing a report.\n\n"
+    "Return only the rewritten text. No intro, no commentary."
 )
 
 # ---------------------------------------------------------------------------
@@ -79,14 +79,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ---------------------------------------------------------------------------
-# Helper utilities
+# Pipeline helpers
 # ---------------------------------------------------------------------------
 
 def count_words(text: str) -> int:
     return len(text.split())
 
 
-# --- Phase 1: summarise if over limit ---
+# Phase 1: optional summarisation
 
 def summarize_text(text: str, target_words: int) -> str:
     response = get_client().chat.completions.create(
@@ -96,7 +96,7 @@ def summarize_text(text: str, target_words: int) -> str:
                 "role": "system",
                 "content": (
                     f"Condense the following text to strictly fewer than {target_words} words. "
-                    "Return only the summary."
+                    "Preserve the key ideas. Return only the condensed text."
                 ),
             },
             {"role": "user", "content": text},
@@ -106,7 +106,7 @@ def summarize_text(text: str, target_words: int) -> str:
     return response.choices[0].message.content.strip()
 
 
-# --- Phase 2: NLP chunking (3 sentences per chunk) ---
+# Phase 2: NLP chunking
 
 def chunk_text(text: str, sentences_per_chunk: int = 3) -> list[str]:
     doc = nlp(text)
@@ -119,7 +119,7 @@ def chunk_text(text: str, sentences_per_chunk: int = 3) -> list[str]:
     return chunks
 
 
-# --- Phase 3: LLM rewrite per chunk ---
+# Phase 3: LLM rewrite
 
 def humanize_chunk(chunk: str) -> str:
     response = get_client().chat.completions.create(
@@ -128,12 +128,12 @@ def humanize_chunk(chunk: str) -> str:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": chunk},
         ],
-        temperature=0.92,
+        temperature=0.88,
     )
     return response.choices[0].message.content.strip()
 
 
-# --- Phase 4a: Contractions ---
+# Phase 4a: contractions
 
 _CONTRACTION_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bcannot\b", re.IGNORECASE), "can't"),
@@ -205,105 +205,44 @@ def strip_ai_phrases(text: str) -> str:
     return _AI_OPENER_PATTERN.sub("", text).strip()
 
 
-# --- Phase 4b: Nepali-English grammar quirks ---
+# Phase 4b: subtle burstiness enforcement
+# Splits overly long sentences at a natural conjunction point.
+# This is the ONE mechanical trick that genuinely raises burstiness score
+# without making the text look wrong.
 
-# Filler phrases injected randomly between sentences to add personal voice
-_FILLERS = [
-    "Honestly,", "I think", "from what I understand,",
-    "it seems to me", "which is quite interesting actually,",
-    "and you know,", "basically,", "I mean,",
-]
-
-# Articles that Nepali English speakers commonly drop
-_ARTICLE_PATTERN = re.compile(r'\b(The|the|A|a|An|an)\s+', re.MULTILINE)
-
-
-def drop_articles_randomly(text: str, drop_rate: float = 0.25) -> str:
-    """Remove articles before nouns at a given probability to mimic non-native speech."""
-    def maybe_drop(match: re.Match) -> str:
-        return "" if random.random() < drop_rate else match.group(0)
-    return _ARTICLE_PATTERN.sub(maybe_drop, text)
+def _find_conjunction_cut(words: list[str]) -> int | None:
+    conjunctions = {"and", "but", "so", "because", "although", "though", "while", "since"}
+    mid = len(words) // 2
+    for offset in range(0, mid - 2):
+        for i in [mid + offset, mid - offset]:
+            if 4 < i < len(words) - 4 and words[i].lower() in conjunctions:
+                return i
+    return None
 
 
-def inject_fillers(text: str, inject_rate: float = 0.3) -> str:
-    """Inject a casual filler phrase at the start of some sentences."""
-    doc = nlp(text)
-    sentences = [s.text.strip() for s in doc.sents if s.text.strip()]
-    result = []
-    for sent in sentences:
-        if random.random() < inject_rate and len(sent.split()) > 6:
-            filler = random.choice(_FILLERS)
-            # Lowercase first char of sentence when prepending a filler
-            body = sent[0].lower() + sent[1:] if sent else sent
-            result.append(f"{filler} {body}")
-        else:
-            result.append(sent)
-    return " ".join(result)
-
-
-def fragment_long_sentences(text: str, threshold: int = 22) -> str:
+def enforce_burstiness(text: str, long_threshold: int = 28) -> str:
     """
-    Chop sentences that are over `threshold` words at a conjunction,
-    turning one smooth sentence into two abrupt fragments — high burstiness.
+    Split sentences over `long_threshold` words at a mid-point conjunction.
+    Only fires on ~60% of eligible sentences to avoid over-processing.
     """
     doc = nlp(text)
     result = []
     for sent in doc.sents:
         words = sent.text.strip().split()
-        if len(words) > threshold and random.random() < 0.5:
-            # Find a mid-point conjunction to cut at
+        if len(words) > long_threshold and random.random() < 0.6:
             cut = _find_conjunction_cut(words)
             if cut:
                 part1 = " ".join(words[:cut]).rstrip(",")
-                part2 = " ".join(words[cut:]).capitalize()
+                part2 = " ".join(words[cut:])
+                # Capitalise start of part2 if it begins with a conjunction
+                part2 = part2[0].upper() + part2[1:]
                 result.append(f"{part1}. {part2}")
                 continue
         result.append(sent.text.strip())
     return " ".join(result)
 
 
-def _find_conjunction_cut(words: list[str]) -> int | None:
-    conjunctions = {"and", "but", "so", "because", "although", "though", "while"}
-    mid = len(words) // 2
-    # Search around the midpoint for a conjunction
-    for offset in range(0, mid):
-        for i in [mid + offset, mid - offset]:
-            if 3 < i < len(words) - 3 and words[i].lower() in conjunctions:
-                return i
-    return None
-
-
-# --- Phase 4c: Homoglyph substitution ---
-# Replaces a small fraction of common Latin letters with visually identical
-# Unicode characters. Readers see nothing different; statistical detectors
-# see a different character distribution.
-
-_HOMOGLYPHS: dict[str, str] = {
-    'a': '\u0430',  # Cyrillic а
-    'e': '\u0435',  # Cyrillic е
-    'o': '\u043e',  # Cyrillic о
-    'p': '\u0440',  # Cyrillic р
-    'c': '\u0441',  # Cyrillic с
-    'x': '\u0445',  # Cyrillic х
-    'i': '\u0456',  # Cyrillic Ukrainian і
-}
-
-
-def apply_homoglyphs(text: str, rate: float = 0.08) -> str:
-    """
-    Randomly swap ~8% of eligible letters with their Unicode homoglyph twins.
-    Invisible to the human eye, disrupts n-gram frequency models used by detectors.
-    """
-    result = []
-    for char in text:
-        if char in _HOMOGLYPHS and random.random() < rate:
-            result.append(_HOMOGLYPHS[char])
-        else:
-            result.append(char)
-    return "".join(result)
-
-
-# --- Phase 5: sentence-aware truncation ---
+# Phase 5: sentence-aware truncation
 
 def truncate_to_word_limit(text: str, limit: int) -> str:
     if count_words(text) <= limit:
@@ -348,33 +287,27 @@ async def humanize(request: Request):
     if target_word_limit < 10:
         return JSONResponse({"error": "Target word limit must be at least 10."}, status_code=400)
 
-    # ── Phase 1: Ingestion & Analysis ──────────────────────────────────────
+    # Phase 1: Summarise if over limit
     original_count = count_words(raw_text)
     working_text = raw_text
-
     if original_count > target_word_limit:
         working_text = summarize_text(raw_text, target_word_limit)
 
-    # ── Phase 2: NLP Segmentation ──────────────────────────────────────────
+    # Phase 2: Chunk
     chunks = chunk_text(working_text)
     if not chunks:
         return JSONResponse({"error": "Could not segment text."}, status_code=422)
 
-    # ── Phase 3: LLM Transformation Loop ───────────────────────────────────
-    humanized_chunks: list[str] = []
-    for chunk in chunks:
-        humanized_chunks.append(humanize_chunk(chunk))
+    # Phase 3: LLM rewrite
+    humanized_chunks = [humanize_chunk(c) for c in chunks]
     draft_text = " ".join(humanized_chunks)
 
-    # ── Phase 4: Multi-layer Obfuscation ───────────────────────────────────
+    # Phase 4: Post-processing
     draft_text = apply_contractions(draft_text)
     draft_text = strip_ai_phrases(draft_text)
-    draft_text = fragment_long_sentences(draft_text)   # burstiness
-    draft_text = drop_articles_randomly(draft_text)    # non-native feel
-    draft_text = inject_fillers(draft_text)            # personal voice
-    draft_text = apply_homoglyphs(draft_text)          # statistical noise
+    draft_text = enforce_burstiness(draft_text)
 
-    # ── Phase 5: Output & Verification ─────────────────────────────────────
+    # Phase 5: Truncate & return
     draft_text = truncate_to_word_limit(draft_text, target_word_limit)
     final_count = count_words(draft_text)
 
