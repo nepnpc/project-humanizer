@@ -46,7 +46,30 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Project Humanizer", lifespan=lifespan)
 templates = Jinja2Templates(directory="templates")
-client = Groq(api_key=GROQ_API_KEY)
+
+# Lazy client — instantiated on first use so a missing key doesn't kill startup
+_client: Groq | None = None
+
+def get_client() -> Groq:
+    global _client
+    if _client is None:
+        key = os.environ.get("GROQ_API_KEY", GROQ_API_KEY)
+        if not key:
+            raise RuntimeError("GROQ_API_KEY is not set. Add it to your environment variables.")
+        _client = Groq(api_key=key)
+    return _client
+
+
+# Global handler — ensures every unhandled exception returns JSON, never a dropped connection
+from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": f"Internal server error: {type(exc).__name__}: {str(exc)}"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +83,7 @@ def count_words(text: str) -> int:
 # --- Phase 1 helper: summarise if over limit ---
 
 def summarize_text(text: str, target_words: int) -> str:
-    response = client.chat.completions.create(
+    response = get_client().chat.completions.create(
         model=MODEL,
         messages=[
             {
@@ -93,7 +116,7 @@ def chunk_text(text: str, sentences_per_chunk: int = 3) -> list[str]:
 # --- Phase 3 helper: single-chunk LLM rewrite ---
 
 def humanize_chunk(chunk: str) -> str:
-    response = client.chat.completions.create(
+    response = get_client().chat.completions.create(
         model=MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -202,6 +225,12 @@ def truncate_to_word_limit(text: str, limit: int) -> str:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    key_set = bool(os.environ.get("GROQ_API_KEY", GROQ_API_KEY))
+    return {"status": "ok", "groq_key_set": key_set, "spacy_loaded": nlp is not None}
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
