@@ -20,7 +20,7 @@ except ImportError:
 # Production: set it in your host's environment/secrets dashboard.
 # ---------------------------------------------------------------------------
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-MODEL = "llama3-8b-8192"
+MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = (
     "You are an expert human writer. Rewrite this text snippet. "
